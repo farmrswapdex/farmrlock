@@ -299,7 +299,9 @@ export default function UnlockPage() {
                 Browse Locks
               </Link>
               <div className="scale-90 sm:scale-100">
-                <ConnectButton />
+                <div className="flex justify-center">
+                  <ConnectButton />
+                </div>
               </div>
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -409,7 +411,9 @@ export default function UnlockPage() {
                 <p className="text-muted-blue mb-6">
                   Please connect your wallet to view and manage your locks
                 </p>
-                <ConnectButton />
+                <div className="flex justify-center">
+                  <ConnectButton />
+                </div>
               </CardContent>
             </Card>
           </div>
