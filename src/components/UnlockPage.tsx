@@ -9,6 +9,7 @@ import {
 import { formatUnits } from "viem";
 import { readContract } from "viem/actions";
 import { LockerContract, BLOCK_EXPLORER } from "../lib/config";
+import { formatUtcDate } from "@/lib/utils";
 import { tokenAbi } from "../lib/tokenABI";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -233,8 +234,7 @@ export default function UnlockPage() {
   };
 
   const formatDate = (timestamp: bigint) => {
-    const date = new Date(Number(timestamp) * 1000);
-    return date.toLocaleString();
+    return formatUtcDate(timestamp);
   };
 
   const formatAddress = (address: string) => {

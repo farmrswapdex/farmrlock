@@ -4,12 +4,21 @@ import { formatUnits } from "viem";
 import { tokenAbi } from "../lib/tokenABI";
 import { readContract } from "viem/actions";
 import { LockerContract, BLOCK_EXPLORER } from "../lib/config";
+import { formatUtcDate } from "@/lib/utils";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Search,
   Lock,
@@ -22,9 +31,11 @@ import {
   X,
   ExternalLink,
   MessageCircle,
+  Search as SearchIcon,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import logo from "@/assets/logo_falwsb.png";
+import { motion, AnimatePresence } from "framer-motion";
 
 interface LockData {
   id: bigint;
@@ -71,10 +82,18 @@ function TokenAmount({ token, amount }: { token: string; amount: bigint }) {
 
 export default function LocksQuery() {
   const [searchLockId, setSearchLockId] = useState("");
-  const [searchTokenAddress, setSearchTokenAddress] = useState("");
+  // deprecated: token address search is now covered by general query
   const [displayedLocks, setDisplayedLocks] = useState<LockData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "active" | "unlockable" | "claimed"
+  >("all");
+  const [sort, setSort] = useState<"unlock-asc" | "unlock-desc">("unlock-asc");
+  const [nextIndex, setNextIndex] = useState<number | null>(null); // index to continue loading older locks
+  const pageSize = 10;
   const config = useConfig();
 
   // Read total lock count
@@ -95,41 +114,55 @@ export default function LocksQuery() {
     },
   });
 
-  // Load recent locks on mount
+  // Load locks in batches (starting from newest)
   useEffect(() => {
-    const loadRecentLocks = async () => {
+    const bootstrap = async () => {
       if (!totalLocks || totalLocks === BigInt(0)) {
         setDisplayedLocks([]);
+        setNextIndex(null);
         return;
       }
-
-      setIsLoading(true);
-      const locks: LockData[] = [];
       const count = Number(totalLocks);
-      const startIndex = Math.max(0, count - 10); // Show last 10 locks
-
-      for (let i = count - 1; i >= startIndex; i--) {
-        try {
-          // Fetch actual lock data from contract using wagmi
-          const lockData = (await readContract(config.getClient(), {
-            address: LockerContract.address as `0x${string}`,
-            abi: LockerContract.abi,
-            functionName: "getLockAt",
-            args: [BigInt(i)],
-          })) as LockData;
-
-          locks.push(lockData);
-        } catch (error) {
-          console.error(`Error fetching lock ${i}:`, error);
-        }
-      }
-
-      setDisplayedLocks(locks);
-      setIsLoading(false);
+      setNextIndex(count - 1);
+      await loadMore(count - 1);
     };
-
-    loadRecentLocks();
+    bootstrap();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalLocks, config]);
+
+  const loadMore = async (fromIndex?: number) => {
+    if (!totalLocks || totalLocks === BigInt(0)) return;
+    const count = Number(totalLocks);
+    const start = fromIndex != null ? fromIndex : nextIndex ?? count - 1;
+    if (start == null || start < 0) return;
+
+    const end = Math.max(-1, start - pageSize);
+    const newLocks: LockData[] = [];
+
+    if (displayedLocks.length === 0) setIsLoading(true);
+    else setIsLoadingMore(true);
+
+    for (let i = start; i > end; i--) {
+      if (i < 0) break;
+      try {
+        const lockData = (await readContract(config.getClient(), {
+          address: LockerContract.address as `0x${string}`,
+          abi: LockerContract.abi,
+          functionName: "getLockAt",
+          args: [BigInt(i)],
+        })) as LockData;
+        newLocks.push(lockData);
+      } catch (error) {
+        console.error(`Error fetching lock ${i}:`, error);
+      }
+    }
+
+    setDisplayedLocks((prev) => [...prev, ...newLocks]);
+    const newNext = start - pageSize;
+    setNextIndex(newNext >= 0 ? newNext : null);
+    setIsLoading(false);
+    setIsLoadingMore(false);
+  };
 
   const handleSearchById = async () => {
     if (!searchLockId) return;
@@ -150,15 +183,25 @@ export default function LocksQuery() {
 
   const handleShowAll = async () => {
     setSearchLockId("");
-    setSearchTokenAddress("");
-    // Reload recent locks
-    window.location.reload();
+    // no-op for token address search
+    setQuery("");
+    setStatusFilter("all");
+    setSort("unlock-asc");
+    // Reset list to newest
+    if (totalLocks && totalLocks > BigInt(0)) {
+      const count = Number(totalLocks);
+      setDisplayedLocks([]);
+      setNextIndex(count - 1);
+      await loadMore(count - 1);
+    } else {
+      setDisplayedLocks([]);
+      setNextIndex(null);
+    }
   };
 
   const formatDate = (timestamp: bigint) => {
     if (timestamp === BigInt(0)) return "N/A";
-    const date = new Date(Number(timestamp) * 1000);
-    return date.toLocaleString();
+    return formatUtcDate(timestamp);
   };
 
   const formatAddress = (address: string) => {
@@ -179,8 +222,52 @@ export default function LocksQuery() {
     return lock.unlockedAmount > BigInt(0);
   };
 
+  const matchesQuery = (l: LockData) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (l.name && l.name.toLowerCase().includes(q)) ||
+      (l.description && l.description.toLowerCase().includes(q)) ||
+      l.owner.toLowerCase().includes(q) ||
+      l.token.toLowerCase().includes(q) ||
+      l.id.toString().includes(q)
+    );
+  };
+
+  const sortByUnlock = (a: LockData, b: LockData) => {
+    const av = Number(a.UnlockedDate);
+    const bv = Number(b.UnlockedDate);
+    return sort === "unlock-asc" ? av - bv : bv - av;
+  };
+
+  const filterByStatus = (l: LockData) => {
+    if (statusFilter === "all") return true;
+    if (statusFilter === "active") return isLockActive(l);
+    if (statusFilter === "unlockable") return isLockExpired(l);
+    if (statusFilter === "claimed") return isLockClaimed(l);
+    return true;
+  };
+
+  const getProgressPct = (lock: LockData) => {
+    const start = Number(lock.lockDate);
+    const end = Number(lock.UnlockedDate);
+    const now = Math.floor(Date.now() / 1000);
+    const total = Math.max(1, end - start);
+    const elapsed = Math.max(0, Math.min(100, ((now - start) / total) * 100));
+    return isNaN(elapsed) ? 0 : elapsed;
+  };
+
+  const visibleLocks = displayedLocks
+    .filter(matchesQuery)
+    .filter(filterByStatus)
+    .sort(sortByUnlock);
+
   return (
-    <div className="min-h-screen bg-light-blue font-baloo">
+    <div className="min-h-screen bg-light-blue font-baloo relative">
+      {/* Soft decorative gradient background */}
+      <div className="pointer-events-none absolute inset-0 opacity-50 [mask-image:radial-gradient(70%_60%_at_50%_0%,#000_40%,transparent_80%)]">
+        <div className="absolute inset-x-0 -top-24 h-80 bg-gradient-to-b from-light-blue to-light-blue-alt/40 blur-2xl" />
+      </div>
       {/* Header */}
       <header className="border-b bg-dark-blue backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3 sm:py-4">
@@ -267,7 +354,8 @@ export default function LocksQuery() {
       {/* Main Content */}
       <div className="container mx-auto px-4 py-12">
         {/* Hero Section */}
-        <div className="mb-12 max-w-6xl mx-auto text-center">
+        <div className="mb-12 max-w-6xl mx-auto text-center relative">
+          <div className="absolute -inset-x-6 -top-6 bottom-0 rounded-3xl bg-white/10 blur-3xl opacity-20" />
           <h1 className="text-4xl md:text-5xl font-bold text-dark-blue-green mb-4 font-fredoka">
             Browse All <span className="text-[#19A24C]">Locks</span>
           </h1>
@@ -312,25 +400,51 @@ export default function LocksQuery() {
 
                 <div>
                   <Label htmlFor="tokenAddress" className="text-muted-blue">
-                    Search by Token Address
+                    Search by text (name/owner/token)
                   </Label>
                   <div className="flex gap-2 mt-1">
                     <Input
-                      id="tokenAddress"
-                      placeholder="0x..."
-                      value={searchTokenAddress}
-                      onChange={(e) => setSearchTokenAddress(e.target.value)}
+                      id="query"
+                      placeholder="Type to filter locks..."
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
                       className="bg-light-gray text-dark-blue-green border-muted-blue"
                     />
-                    <Button disabled className="bg-muted-blue text-white">
-                      <Search className="w-4 h-4" />
-                    </Button>
                   </div>
-                  <p className="text-xs text-muted-blue mt-1">Coming soon</p>
                 </div>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+                <div className="flex items-center gap-2 w-full md:w-auto">
+                  <Select
+                    value={statusFilter}
+                    onValueChange={(v: typeof statusFilter) =>
+                      setStatusFilter(v)
+                    }
+                  >
+                    <SelectTrigger className="w-full md:w-[170px] bg-transparent border-muted-blue text-white">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-dark-blue text-white border-muted-blue">
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="unlockable">Unlockable</SelectItem>
+                      <SelectItem value="claimed">Claimed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={sort}
+                    onValueChange={(v: typeof sort) => setSort(v)}
+                  >
+                    <SelectTrigger className="w-full md:w-[190px] bg-transparent border-muted-blue text-white">
+                      <SelectValue placeholder="Sort by" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-dark-blue text-white border-muted-blue">
+                      <SelectItem value="unlock-asc">Oldest locks</SelectItem>
+                      <SelectItem value="unlock-desc">Latest locks</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <Button
                   onClick={handleShowAll}
                   variant="outline"
@@ -412,131 +526,181 @@ export default function LocksQuery() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {displayedLocks.map((lock) => (
-                    <Card
-                      key={lock.id.toString()}
-                      className="bg-light-gray border-muted-blue"
-                    >
-                      <CardContent className="pt-6">
-                        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                          <div className="flex-1 space-y-3">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <h3 className="text-lg font-bold text-dark-blue-green">
-                                  {lock.name || `Lock #${lock.id.toString()}`}
-                                </h3>
-                                {lock.description && (
-                                  <p className="text-sm text-dark-blue-green/70 mt-1">
-                                    {lock.description}
-                                  </p>
+                  <AnimatePresence>
+                    {visibleLocks.map((lock, idx) => (
+                      <motion.div
+                        key={lock.id.toString()}
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                        transition={{
+                          duration: 0.2,
+                          delay: Math.min(idx, 6) * 0.03,
+                        }}
+                      >
+                        <Card className="bg-light-gray border-muted-blue hover:border-bright-blue/60 transition">
+                          <CardContent className="pt-6">
+                            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                              <div className="flex-1 space-y-3">
+                                <div className="flex items-start justify-between">
+                                  <div>
+                                    <h3 className="text-lg font-bold text-dark-blue-green">
+                                      {lock.name ||
+                                        `Lock #${lock.id.toString()}`}
+                                    </h3>
+                                    {lock.description && (
+                                      <p className="text-sm text-dark-blue-green/70 mt-1">
+                                        {lock.description}
+                                      </p>
+                                    )}
+                                  </div>
+                                  <Badge
+                                    className={
+                                      isLockClaimed(lock)
+                                        ? "bg-gray-500"
+                                        : isLockExpired(lock)
+                                        ? "bg-orange-500"
+                                        : "bg-green-500"
+                                    }
+                                  >
+                                    {isLockClaimed(lock)
+                                      ? "Unlocked"
+                                      : isLockExpired(lock)
+                                      ? "Unlockable"
+                                      : "Active"}
+                                  </Badge>
+                                </div>
+
+                                <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                                  <div className="flex items-center gap-2">
+                                    <Lock className="w-4 h-4 text-bright-blue" />
+                                    <span className="text-dark-blue-green/70">
+                                      Lock ID:
+                                    </span>
+                                    <span className="font-semibold text-dark-blue-green">
+                                      #{lock.id.toString()}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <User className="w-4 h-4 text-bright-blue" />
+                                    <span className="text-dark-blue-green/70">
+                                      Owner:
+                                    </span>
+                                    <a
+                                      href={`${BLOCK_EXPLORER}/address/${lock.owner}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="font-mono text-dark-blue-green hover:text-bright-blue inline-flex items-center gap-1"
+                                    >
+                                      {formatAddress(lock.owner)}
+                                      <ExternalLink className="h-3 w-3" />
+                                    </a>
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <TrendingUp className="w-4 h-4 text-bright-blue" />
+                                    <span className="text-dark-blue-green/70">
+                                      Amount:
+                                    </span>
+                                    <span className="font-semibold text-dark-blue-green">
+                                      <TokenAmount
+                                        token={lock.token}
+                                        amount={lock.amount}
+                                      />
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <Clock className="w-4 h-4 text-bright-blue" />
+                                    <span className="text-dark-blue-green/70">
+                                      Unlock Date:
+                                    </span>
+                                    <span className="font-semibold text-dark-blue-green">
+                                      {formatDate(lock.UnlockedDate)}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="text-xs text-dark-blue-green/60">
+                                  Token:
+                                  <a
+                                    href={`${BLOCK_EXPLORER}/address/${lock.token}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="ml-1 hover:text-bright-blue inline-flex items-center gap-1"
+                                  >
+                                    {formatAddress(lock.token)}
+                                    <ExternalLink className="h-3 w-3" />
+                                  </a>
+                                </div>
+
+                                {isLockActive(lock) && (
+                                  <div className="mt-2 space-y-1">
+                                    <Progress
+                                      value={getProgressPct(lock)}
+                                      className="bg-muted-blue/30"
+                                    />
+                                    <div className="flex items-center justify-between text-xs text-dark-blue-green/70">
+                                      <span className="inline-flex items-center gap-1">
+                                        <Clock className="w-3.5 h-3.5 text-bright-blue" />
+                                        In progress
+                                      </span>
+                                      <span>
+                                        {getProgressPct(lock).toFixed(0)}%
+                                      </span>
+                                    </div>
+                                  </div>
                                 )}
                               </div>
-                              <Badge
-                                className={
-                                  isLockClaimed(lock)
-                                    ? "bg-gray-500"
-                                    : isLockExpired(lock)
-                                    ? "bg-orange-500"
-                                    : "bg-green-500"
-                                }
-                              >
-                                {isLockClaimed(lock)
-                                  ? "Unlocked"
-                                  : isLockExpired(lock)
-                                  ? "Unlockable"
-                                  : "Active"}
-                              </Badge>
-                            </div>
 
-                            <div className="grid sm:grid-cols-2 gap-3 text-sm">
-                              <div className="flex items-center gap-2">
-                                <Lock className="w-4 h-4 text-bright-blue" />
-                                <span className="text-dark-blue-green/70">
-                                  Lock ID:
-                                </span>
-                                <span className="font-semibold text-dark-blue-green">
-                                  #{lock.id.toString()}
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <User className="w-4 h-4 text-bright-blue" />
-                                <span className="text-dark-blue-green/70">
-                                  Owner:
-                                </span>
-                                <a
-                                  href={`${BLOCK_EXPLORER}/address/${lock.owner}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="font-mono text-dark-blue-green hover:text-bright-blue inline-flex items-center gap-1"
-                                >
-                                  {formatAddress(lock.owner)}
-                                  <ExternalLink className="h-3 w-3" />
-                                </a>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <TrendingUp className="w-4 h-4 text-bright-blue" />
-                                <span className="text-dark-blue-green/70">
-                                  Amount:
-                                </span>
-                                <span className="font-semibold text-dark-blue-green">
-                                  <TokenAmount
-                                    token={lock.token}
-                                    amount={lock.amount}
-                                  />
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <Clock className="w-4 h-4 text-bright-blue" />
-                                <span className="text-dark-blue-green/70">
-                                  Unlock Date:
-                                </span>
-                                <span className="font-semibold text-dark-blue-green">
-                                  {formatDate(lock.UnlockedDate)}
-                                </span>
+                              <div className="flex md:flex-col gap-2">
+                                {isLockActive(lock) && (
+                                  <div className="flex items-center gap-1 text-green-600 text-sm">
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    <span>Locked</span>
+                                  </div>
+                                )}
+                                {isLockExpired(lock) && (
+                                  <div className="flex items-center gap-1 text-orange-600 text-sm">
+                                    <Clock className="w-4 h-4" />
+                                    <span>Unclaimed</span>
+                                  </div>
+                                )}
+                                {isLockClaimed(lock) && (
+                                  <div className="flex items-center gap-1 text-gray-600 text-sm">
+                                    <XCircle className="w-4 h-4" />
+                                    <span>Claimed</span>
+                                  </div>
+                                )}
                               </div>
                             </div>
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
 
-                            <div className="text-xs text-dark-blue-green/60">
-                              Token:
-                              <a
-                                href={`${BLOCK_EXPLORER}/address/${lock.token}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="ml-1 hover:text-bright-blue inline-flex items-center gap-1"
-                              >
-                                {formatAddress(lock.token)}
-                                <ExternalLink className="h-3 w-3" />
-                              </a>
-                            </div>
-                          </div>
-
-                          <div className="flex md:flex-col gap-2">
-                            {isLockActive(lock) && (
-                              <div className="flex items-center gap-1 text-green-600 text-sm">
-                                <CheckCircle2 className="w-4 h-4" />
-                                <span>Locked</span>
-                              </div>
-                            )}
-                            {isLockExpired(lock) && (
-                              <div className="flex items-center gap-1 text-orange-600 text-sm">
-                                <Clock className="w-4 h-4" />
-                                <span>Unclaimed</span>
-                              </div>
-                            )}
-                            {isLockClaimed(lock) && (
-                              <div className="flex items-center gap-1 text-gray-600 text-sm">
-                                <XCircle className="w-4 h-4" />
-                                <span>Claimed</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                  {nextIndex !== null && (
+                    <div className="flex justify-center pt-2">
+                      <Button
+                        onClick={() => loadMore()}
+                        disabled={isLoadingMore}
+                        className="bg-bright-blue hover:bg-[#19A24C] text-white"
+                      >
+                        {isLoadingMore ? (
+                          <span className="inline-flex items-center gap-2">
+                            <span className="inline-block animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                            Loading...
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-2">
+                            <SearchIcon className="w-4 h-4" /> Load more
+                          </span>
+                        )}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -550,12 +714,29 @@ export default function LocksQuery() {
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
               <img src={logo} alt="FarmrLock" className="w-8 h-8 rounded-lg" />
-              <p className="text-muted-blue text-sm">© 2025 FarmrSwap. All rights reserved.</p>
+              <p className="text-muted-blue text-sm">
+                © 2025 FarmrSwap. All rights reserved.
+              </p>
             </div>
             <div className="flex items-center gap-6">
-              <Link to="/" className="text-muted-blue hover:text-white text-sm transition-colors">Create Lock</Link>
-              <Link to="/unlock" className="text-muted-blue hover:text-white text-sm transition-colors">My Locks</Link>
-              <Link to="/query" className="text-muted-blue hover:text-white text-sm transition-colors">Browse Locks</Link>
+              <Link
+                to="/"
+                className="text-muted-blue hover:text-white text-sm transition-colors"
+              >
+                Create Lock
+              </Link>
+              <Link
+                to="/unlock"
+                className="text-muted-blue hover:text-white text-sm transition-colors"
+              >
+                My Locks
+              </Link>
+              <Link
+                to="/query"
+                className="text-muted-blue hover:text-white text-sm transition-colors"
+              >
+                Browse Locks
+              </Link>
             </div>
           </div>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-4 text-center">

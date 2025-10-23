@@ -61,14 +61,21 @@ function parseTimeLeft(seconds: number): TimeRemaining {
   };
 }
 
+// Format a Unix timestamp (in seconds) to a consistent UTC string like "YYYY-MM-DD HH:mm:ss (UTC)"
+export function formatUtcDate(seconds: number | bigint | string): string {
+  try {
+    const s = typeof seconds === 'bigint' ? Number(seconds) : typeof seconds === 'string' ? Number(seconds) : seconds;
+    const d = new Date((s || 0) * 1000);
+    if (isNaN(d.getTime())) return 'N/A';
+    const iso = d.toISOString(); // e.g., 2025-01-02T03:04:05.000Z
+    const main = iso.replace('T', ' ').replace(/\.\d+Z$/, '');
+    return `${main} (UTC)`;
+  } catch {
+    return 'N/A';
+  }
+}
+
+// Backwards compatibility for presale date formatting: now standardized to UTC format
 export function formatPresaleDate(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'UTC',
-    timeZoneName: 'short'
-  });
+  return formatUtcDate(timestamp);
 }

@@ -7,6 +7,7 @@ import {
 } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
 import { LockerContract, BLOCK_EXPLORER } from "../lib/config";
+import { formatUtcDate } from "@/lib/utils";
 import { tokenAbi } from "../lib/tokenABI";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -31,9 +33,11 @@ import {
   X,
   CheckCircle2,
   ArrowRight,
+  Info,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import logo from "@/assets/logo_falwsb.png";
 import bigjuicy from "@/assets/bigjuicy.png";
 
@@ -64,6 +68,8 @@ export default function LockerInterface() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [isLocking, setIsLocking] = useState(false);
+  const [lastAction, setLastAction] = useState<"approve" | "lock" | null>(null);
+  const navigate = useNavigate();
 
   // Set error from contract error
   useEffect(() => {
@@ -124,6 +130,15 @@ export default function LockerInterface() {
       }, 5000);
       setIsApproving(false);
       setIsLocking(false);
+      // Navigate after a short delay if we just locked tokens
+      if (lastAction === "lock") {
+        setTimeout(() => {
+          navigate("/unlock");
+          setLastAction(null);
+        }, 1400);
+      } else {
+        setLastAction(null);
+      }
       return () => clearTimeout(timer);
     }
   }, [txSuccess]);
@@ -133,6 +148,16 @@ export default function LockerInterface() {
     address: tokenAddress as `0x${string}`,
     abi: tokenAbi,
     functionName: "decimals",
+    query: {
+      enabled: tokenAddress?.length === 42 && tokenAddress.startsWith("0x"),
+    },
+  });
+
+  // Read token symbol for display
+  const { data: tokenSymbol } = useReadContract({
+    address: tokenAddress as `0x${string}`,
+    abi: tokenAbi,
+    functionName: "symbol",
     query: {
       enabled: tokenAddress?.length === 42 && tokenAddress.startsWith("0x"),
     },
@@ -181,17 +206,7 @@ export default function LockerInterface() {
     },
   });
 
-  const formattedTokenBalance = useMemo(() => {
-    if (rawTokenBalance == null || !tokenDecimals) return "0";
-    try {
-      return parseFloat(
-        formatUnits(rawTokenBalance as bigint, Number(tokenDecimals))
-      ).toLocaleString();
-    } catch {
-      return "0";
-    }
-  }, [rawTokenBalance, tokenDecimals]);
-
+  // Helper: convert durations to seconds
   const convertToSeconds = (value: string, unit: string): bigint => {
     const numValue = parseFloat(value);
     if (isNaN(numValue)) return BigInt(0);
@@ -214,6 +229,62 @@ export default function LockerInterface() {
     }
   };
 
+  const formattedTokenBalance = useMemo(() => {
+    if (rawTokenBalance == null || !tokenDecimals) return "0";
+    try {
+      return parseFloat(
+        formatUnits(rawTokenBalance as bigint, Number(tokenDecimals))
+      ).toLocaleString();
+    } catch {
+      return "0";
+    }
+  }, [rawTokenBalance, tokenDecimals]);
+
+  const isValidAddress = useMemo(() => {
+    return tokenAddress?.length === 42 && tokenAddress.startsWith("0x");
+  }, [tokenAddress]);
+
+  const amountValid = useMemo(() => parseFloat(lockAmount) > 0, [lockAmount]);
+  const durationValid = useMemo(() => parseFloat(lockDuration) > 0, [lockDuration]);
+  const nameValid = useMemo(() => lockName.trim().length > 0, [lockName]);
+
+  const durationSeconds = useMemo(
+    () => Number(convertToSeconds(lockDuration, durationUnit)),
+    [lockDuration, durationUnit]
+  );
+
+  const estimatedUnlock = useMemo(() => {
+    if (!durationValid) return null;
+    try {
+      const ms = Date.now() + durationSeconds * 1000;
+      const seconds = Math.floor(ms / 1000);
+      return formatUtcDate(seconds);
+    } catch {
+      return null;
+    }
+  }, [durationValid, durationSeconds]);
+
+  const humanizeSeconds = (sec: number) => {
+    if (!isFinite(sec) || sec <= 0) return "—";
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
+
+  const stepIndex = useMemo(() => {
+    // 1: Token, 2: Amount, 3: Details, 4: Approve/Lock
+    let s = 1;
+    if (isValidAddress) s = 2;
+    if (isValidAddress && amountValid) s = 3;
+    if (isValidAddress && amountValid && durationValid && nameValid) s = 4;
+    return s;
+  }, [isValidAddress, amountValid, durationValid, nameValid]);
+
+  
+
   const handleApprove = async () => {
     if (!tokenAddress || !lockAmount) {
       setError("Please enter token address and amount");
@@ -229,6 +300,7 @@ export default function LockerInterface() {
         functionName: "approve",
         args: [LockerContract.address, amountToApprove],
       });
+      setLastAction("approve");
       setSuccessMessage(
         "Token approval successful! You can now lock your tokens."
       );
@@ -275,6 +347,7 @@ export default function LockerInterface() {
           lockDescription || "",
         ],
       });
+      setLastAction("lock");
       setSuccessMessage(
         `Lock created successfully! Your tokens are now secured.`
       );
@@ -301,7 +374,11 @@ export default function LockerInterface() {
   }, [allowance, lockAmount, selectedTokenDecimals]);
 
   return (
-    <div className="min-h-screen bg-light-blue font-baloo">
+    <div className="min-h-screen bg-light-blue font-baloo relative">
+      {/* Soft decorative gradient background */}
+      <div className="pointer-events-none absolute inset-0 opacity-50 [mask-image:radial-gradient(70%_60%_at_50%_0%,#000_40%,transparent_80%)]">
+        <div className="absolute inset-x-0 -top-24 h-80 bg-gradient-to-b from-light-blue to-light-blue-alt/40 blur-2xl" />
+      </div>
       {/* Header */}
       <header className="border-b bg-dark-blue backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3 sm:py-4">
@@ -387,49 +464,56 @@ export default function LockerInterface() {
 
       {/* Notifications */}
       <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-md px-4">
-        {error && (
-          <Alert className="mb-4 border-red-500 bg-red-50 shadow-lg">
-            <AlertCircle className="h-4 w-4 text-red-500" />
-            <AlertDescription className="text-red-700">
-              {error}
-            </AlertDescription>
-          </Alert>
-        )}
+        <AnimatePresence>
+          {error && (
+            <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+              <Alert className="mb-4 border-red-500 bg-red-50 shadow-lg">
+                <AlertCircle className="h-4 w-4 text-red-500" />
+                <AlertDescription className="text-red-700">{error}</AlertDescription>
+              </Alert>
+            </motion.div>
+          )}
 
-        {showTxHash && !error && (
-          <Alert className="mb-4 shadow-lg border-blue-500 bg-blue-50">
-            <Clock className="h-4 w-4 text-blue-600" />
-            <AlertDescription className="text-blue-800">
-              <div className="flex items-center gap-2">
-                <span>Transaction pending...</span>
-                <a
-                  href={`${BLOCK_EXPLORER}/tx/${showTxHash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 underline font-medium"
-                >
-                  View
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              </div>
-            </AlertDescription>
-          </Alert>
-        )}
+          {showTxHash && !error && (
+            <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+              <Alert className="mb-4 shadow-lg border-blue-500 bg-blue-50">
+                <Clock className="h-4 w-4 text-blue-600" />
+                <AlertDescription className="text-blue-800">
+                  <div className="flex items-center gap-2">
+                    <span>Transaction pending...</span>
+                    <a
+                      href={`${BLOCK_EXPLORER}/tx/${showTxHash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 underline font-medium"
+                    >
+                      View
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                </AlertDescription>
+              </Alert>
+            </motion.div>
+          )}
 
-        {showSuccess && (
-          <Alert className="mb-4 border-green-500 bg-green-50 shadow-lg">
-            <CheckCircle2 className="h-5 w-5 text-green-600" />
-            <AlertDescription className="text-green-800 font-medium">
-              {successMessage || "Success!"}
-            </AlertDescription>
-          </Alert>
-        )}
+          {showSuccess && (
+            <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+              <Alert className="mb-4 border-green-500 bg-green-50 shadow-lg">
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                <AlertDescription className="text-green-800 font-medium">
+                  {successMessage || "Success!"}
+                </AlertDescription>
+              </Alert>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Main Content */}
       <div className="container mx-auto px-4 py-12">
         {/* Hero Section */}
-        <div className="mb-12 max-w-5xl mx-auto">
+        <div className="mb-12 max-w-5xl mx-auto relative">
+          <div className="absolute -inset-x-6 -top-6 bottom-0 rounded-3xl bg-white/10 blur-3xl opacity-20" />
           <div className="flex flex-col lg:flex-row items-center justify-between gap-8">
             <div className="text-center lg:text-left flex-1">
               <h1 className="text-4xl md:text-6xl font-bold text-dark-blue-green mb-4 font-fredoka">
@@ -463,7 +547,37 @@ export default function LockerInterface() {
                   Create New Lock
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-5">
+                {/* Stepper */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { label: "Token" },
+                    { label: "Amount" },
+                    { label: "Details" },
+                    { label: "Approve & Lock" },
+                  ].map((st, idx) => {
+                    const pos = idx + 1;
+                    const active = stepIndex === pos;
+                    const complete = stepIndex > pos;
+                    return (
+                      <motion.div
+                        key={st.label}
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.2, delay: idx * 0.05 }}
+                        className={`rounded-lg border px-3 py-2 text-center text-xs font-semibold transition ${
+                          complete
+                            ? "bg-bright-blue/20 border-bright-blue text-white"
+                            : active
+                            ? "bg-[#0f1526] border-bright-blue text-white"
+                            : "bg-[#0f1526] border-muted-blue/50 text-muted-blue"
+                        }`}
+                      >
+                        {st.label}
+                      </motion.div>
+                    );
+                  })}
+                </div>
                 <div>
                   <Label htmlFor="tokenAddress" className="text-muted-blue">
                     Token Address *
@@ -478,21 +592,20 @@ export default function LockerInterface() {
                   <div className="flex items-center justify-between mt-1">
                     {rawTokenBalance !== undefined && (
                       <p className="text-xs text-muted-blue">
-                        Balance: {formattedTokenBalance}
+                        Balance: {formattedTokenBalance} {tokenSymbol ? String(tokenSymbol) : ""}
                       </p>
                     )}
-                    {tokenAddress?.length === 42 &&
-                      tokenAddress.startsWith("0x") && (
-                        <a
-                          href={`${BLOCK_EXPLORER}/address/${tokenAddress}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-bright-blue hover:text-[#19A24C] inline-flex items-center gap-1"
-                        >
-                          View Token
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
-                      )}
+                    {isValidAddress && (
+                      <a
+                        href={`${BLOCK_EXPLORER}/address/${tokenAddress}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-bright-blue hover:text-[#19A24C] inline-flex items-center gap-1"
+                      >
+                        View Token
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
                   </div>
                 </div>
 
@@ -519,6 +632,9 @@ export default function LockerInterface() {
                       Max
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-blue mt-1">
+                    {tokenSymbol ? `Token: ${String(tokenSymbol)}` : isValidAddress ? "Fetching token symbol..." : ""}
+                  </p>
                 </div>
 
                 <div>
@@ -582,11 +698,17 @@ export default function LockerInterface() {
                     </Select>
                   </div>
                   {lockDuration && (
-                    <p className="text-xs text-muted-blue mt-1">
-                      ={" "}
-                      {convertToSeconds(lockDuration, durationUnit).toString()}{" "}
-                      seconds
-                    </p>
+                    <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <div className="text-muted-blue">
+                        = {convertToSeconds(lockDuration, durationUnit).toString()} seconds ({humanizeSeconds(durationSeconds)})
+                      </div>
+                      {estimatedUnlock && (
+                        <div className="text-muted-blue inline-flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5" />
+                          Estimated unlock: <span className="font-semibold text-white/90">{estimatedUnlock}</span>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -618,12 +740,13 @@ export default function LockerInterface() {
 
                 <Separator className="bg-muted-blue" />
 
-                <div className="flex gap-3">
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
                   {isApprovalNeeded && (
-                    <Button
+                    <motion.button
                       onClick={handleApprove}
                       disabled={!address || !tokenAddress || !lockAmount || isApproving || isLocking}
-                      className="flex-1 bg-muted-blue hover:bg-[#19A24C] text-white"
+                      className="w-full sm:flex-1 h-9 rounded-md px-4 font-medium bg-[#19A24C] hover:bg-bright-blue text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      whileTap={{ scale: 0.98 }}
                     >
                       {isApproving ? (
                         <span className="inline-flex items-center gap-2">
@@ -633,12 +756,13 @@ export default function LockerInterface() {
                       ) : (
                         "1. Approve Token"
                       )}
-                    </Button>
+                    </motion.button>
                   )}
-                  <Button
+                  <motion.button
                     onClick={handleLock}
                     disabled={!address || isApprovalNeeded || !lockName || isApproving || isLocking}
-                    className="flex-1 bg-bright-blue hover:bg-[#19A24C] text-white"
+                    className="w-full sm:flex-1 h-9 rounded-md px-4 font-medium bg-bright-blue hover:bg-[#19A24C] text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    whileTap={{ scale: 0.98 }}
                   >
                     {isLocking ? (
                       <span className="inline-flex items-center gap-2">
@@ -650,7 +774,7 @@ export default function LockerInterface() {
                     ) : (
                       "Lock Tokens"
                     )}
-                  </Button>
+                  </motion.button>
                 </div>
               </CardContent>
             </Card>
@@ -658,6 +782,73 @@ export default function LockerInterface() {
 
           {/* Right Column - Info */}
           <div className="lg:col-span-4 space-y-6">
+            {/* Summary Card */}
+            <Card className="bg-dark-blue border-bright-blue/40">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg text-white flex items-center gap-2">
+                  <Info className="w-5 h-5 text-bright-blue" /> Lock Summary
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {!isValidAddress && !amountValid && !durationValid && !nameValid ? (
+                  <div className="text-center py-6 text-muted-blue text-sm">
+                    Fill the form to preview your lock details
+                  </div>
+                ) : (
+                  <div className="space-y-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-blue">Token</span>
+                      <span className="font-mono text-white truncate max-w-[60%] text-right">
+                        {isValidAddress ? `${tokenAddress.slice(0, 6)}...${tokenAddress.slice(-4)}` : "—"}
+                        {tokenSymbol ? ` (${String(tokenSymbol)})` : ""}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-blue">Amount</span>
+                      <span className="text-white font-semibold">
+                        {lockAmount || "—"} {tokenSymbol ? String(tokenSymbol) : ""}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-blue">Duration</span>
+                      <span className="text-white">{lockDuration ? `${lockDuration} ${durationUnit}` : "—"} {lockDuration && `(${humanizeSeconds(durationSeconds)})`}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-blue">Est. Unlock</span>
+                      <span className="text-white">{estimatedUnlock || "—"}</span>
+                    </div>
+                    <Separator className="bg-muted-blue/30" />
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-blue">Name</span>
+                      <span className="text-white truncate max-w-[60%] text-right">{lockName || "—"}</span>
+                    </div>
+                    {lockDescription && (
+                      <div className="flex items-start justify-between">
+                        <span className="text-muted-blue">Description</span>
+                        <span className="text-white text-right max-w-[60%]">{lockDescription}</span>
+                      </div>
+                    )}
+                    <div className="pt-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-blue">Approval</span>
+                        <div className="inline-flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 rounded-full ${isApprovalNeeded ? "bg-yellow-400" : "bg-green-500"}`} />
+                          <span className="text-white text-xs">
+                            {isApprovalNeeded ? "Needed" : "Approved"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-2">
+                        <Progress value={isApprovalNeeded ? 50 : 100} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="text-[11px] text-muted-blue/80 leading-relaxed">
+                  By locking, you agree funds remain unspendable until the unlock time. Always verify the token address and amount before confirming.
+                </div>
+              </CardContent>
+            </Card>
             {/* Stats Card */}
             <Card className="bg-dark-blue border-muted-blue">
               <CardHeader className="pb-3">
