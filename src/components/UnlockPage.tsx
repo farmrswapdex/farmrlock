@@ -13,6 +13,15 @@ import { tokenAbi } from "../lib/tokenABI";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -28,6 +37,7 @@ import {
   ExternalLink,
   MessageCircle,
   Copy,
+  Search,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import logo from "@/assets/logo_falwsb.png";
@@ -87,6 +97,9 @@ export default function UnlockPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"all" | "ready" | "active" | "claimed">("all");
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<"unlock-asc" | "unlock-desc">("unlock-asc");
   const { address } = useAccount();
   const config = useConfig();
   const {
@@ -256,12 +269,63 @@ export default function UnlockPage() {
     return lock.unlockedAmount > BigInt(0);
   };
 
+  // Derived lists
   const activeLocks = userLocks.filter(isLockActive);
   const readyLocks = userLocks.filter(isLockReady);
   const claimedLocks = userLocks.filter(isLockClaimed);
 
+  // Search + sort helpers
+  const matchesQuery = (l: LockData) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (l.name && l.name.toLowerCase().includes(q)) ||
+      (l.description && l.description.toLowerCase().includes(q)) ||
+      l.token.toLowerCase().includes(q) ||
+      l.id.toString().includes(q)
+    );
+  };
+
+  const sortByUnlock = (a: LockData, b: LockData) => {
+    const av = Number(a.UnlockedDate);
+    const bv = Number(b.UnlockedDate);
+    return sort === "unlock-asc" ? av - bv : bv - av;
+  };
+
+  const filteredByTab = (tab: typeof activeTab) => {
+    switch (tab) {
+      case "ready":
+        return readyLocks;
+      case "active":
+        return activeLocks;
+      case "claimed":
+        return claimedLocks;
+      default:
+        return userLocks;
+    }
+  };
+
+  const visibleLocks = filteredByTab(activeTab)
+    .filter(matchesQuery)
+    .sort(sortByUnlock);
+
+  const clamp = (n: number, min = 0, max = 100) => Math.max(min, Math.min(max, n));
+
+  const getProgressPct = (lock: LockData) => {
+    const start = Number(lock.lockDate);
+    const end = Number(lock.UnlockedDate);
+    const now = Math.floor(Date.now() / 1000);
+    const total = Math.max(1, end - start);
+    const elapsed = clamp(((now - start) / total) * 100);
+    return isNaN(elapsed) ? 0 : clamp(elapsed);
+  };
+
   return (
-    <div className="min-h-screen bg-light-blue font-baloo">
+    <div className="min-h-screen bg-light-blue font-baloo relative">
+      {/* Soft decorative gradient background */}
+      <div className="pointer-events-none absolute inset-0 opacity-50 [mask-image:radial-gradient(70%_60%_at_50%_0%,#000_40%,transparent_80%)]">
+        <div className="absolute inset-x-0 -top-24 h-80 bg-gradient-to-b from-light-blue to-light-blue-alt/40 blur-2xl" />
+      </div>
       {/* Header */}
       <header className="border-b bg-dark-blue backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-3 sm:py-4">
@@ -391,13 +455,12 @@ export default function UnlockPage() {
       {/* Main Content */}
       <div className="container mx-auto px-4 py-12">
         {/* Hero Section */}
-        <div className="mb-12 max-w-6xl mx-auto text-center">
-          <h1 className="text-4xl md:text-5xl font-bold text-dark-blue-green mb-4 font-fredoka">
+        <div className="mb-10 max-w-6xl mx-auto text-center relative">
+          <div className="absolute -inset-x-6 -top-6 bottom-0 rounded-3xl bg-white/10 blur-3xl opacity-20" />
+          <h1 className="relative text-4xl md:text-5xl font-bold text-dark-blue-green mb-3 font-fredoka tracking-tight">
             My <span className="text-[#19A24C]">Locks</span>
           </h1>
-          <p className="text-lg text-dark-blue-green">
-            Manage and unlock your token locks
-          </p>
+          <p className="relative text-lg text-dark-blue-green">Manage and unlock your token locks</p>
         </div>
 
         {!address ? (
@@ -421,7 +484,7 @@ export default function UnlockPage() {
           <div className="max-w-6xl mx-auto space-y-8">
             {/* Stats Cards */}
             <div className="grid md:grid-cols-3 gap-4">
-              <Card className="bg-dark-blue border-muted-blue">
+              <Card className="bg-dark-blue border-muted-blue transition hover:shadow-lg hover:border-bright-blue/60">
                 <CardContent className="pt-6">
                   <div className="flex items-center gap-3">
                     <div className="p-3 bg-green-500/10 rounded-lg">
@@ -437,7 +500,7 @@ export default function UnlockPage() {
                 </CardContent>
               </Card>
 
-              <Card className="bg-dark-blue border-muted-blue">
+              <Card className="bg-dark-blue border-muted-blue transition hover:shadow-lg hover:border-bright-blue/60">
                 <CardContent className="pt-6">
                   <div className="flex items-center gap-3">
                     <div className="p-3 bg-yellow-500/10 rounded-lg">
@@ -453,7 +516,7 @@ export default function UnlockPage() {
                 </CardContent>
               </Card>
 
-              <Card className="bg-dark-blue border-muted-blue">
+              <Card className="bg-dark-blue border-muted-blue transition hover:shadow-lg hover:border-bright-blue/60">
                 <CardContent className="pt-6">
                   <div className="flex items-center gap-3">
                     <div className="p-3 bg-gray-500/10 rounded-lg">
@@ -470,115 +533,164 @@ export default function UnlockPage() {
               </Card>
             </div>
 
+            {/* Controls */}
+            <Card className="bg-dark-blue border-muted-blue">
+              <CardContent className="pt-6 pb-6">
+                <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+                  {/* Tabs */}
+                  <div className="flex w-full md:w-auto overflow-x-auto rounded-lg bg-[#0f1526] border border-muted-blue/50 p-1">
+                    {([
+                      { k: "all", label: "All" },
+                      { k: "ready", label: "Ready" },
+                      { k: "active", label: "Active" },
+                      { k: "claimed", label: "Claimed" },
+                    ] as const).map((t) => (
+                      <button
+                        key={t.k}
+                        onClick={() => setActiveTab(t.k)}
+                        className={`relative px-4 py-2 text-sm font-semibold rounded-md transition-colors ${
+                          activeTab === t.k
+                            ? "bg-bright-blue text-white"
+                            : "text-muted-blue hover:text-white"
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Search + Sort */}
+                  <div className="flex w-full md:w-auto items-center gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-blue" />
+                      <Input
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Search by name, id, or token"
+                        className="pl-8 bg-transparent border-muted-blue text-white placeholder:text-muted-blue"
+                      />
+                    </div>
+                    <Select
+                      value={sort}
+                      onValueChange={(v: typeof sort) => setSort(v)}
+                    >
+                      <SelectTrigger className="w-[190px] bg-transparent border-muted-blue text-white">
+                        <SelectValue placeholder="Sort by" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-dark-blue text-white border-muted-blue">
+                        <SelectItem value="unlock-asc">Soonest unlock</SelectItem>
+                        <SelectItem value="unlock-desc">Latest unlock</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {activeTab === "all" && (
+                  <p className="mt-3 text-xs text-muted-blue">
+                    Showing {visibleLocks.length} of {userLocks.length} locks
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Ready to Unlock */}
-            {readyLocks.length > 0 && (
+            {(activeTab === "all" || activeTab === "ready") && (
               <Card className="bg-dark-blue border-yellow-500">
                 <CardHeader>
                   <CardTitle className="text-xl text-white flex items-center gap-2">
                     <Unlock className="w-5 h-5 text-yellow-500" />
-                    Ready to Unlock ({readyLocks.length})
+                    Ready to Unlock ({readyLocks.filter(matchesQuery).length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {readyLocks.map((lock) => (
-                    <Card
-                      key={lock.id.toString()}
-                      className="bg-light-gray border-yellow-500"
-                    >
-                      <CardContent className="pt-6">
-                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                          <div className="flex-1 space-y-2">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <h3 className="text-lg font-bold text-dark-blue-green">
-                                  {lock.name || `Lock #${lock.id.toString()}`}
-                                </h3>
-                                <p className="font-mono text-xs text-dark-blue-green/70 inline-flex items-center gap-2">
-                                  <span>ID: {lock.id.toString()}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopyId(lock.id)}
-                                    className="p-1 hover:text-bright-blue transition-colors"
-                                    aria-label="Copy Lock ID"
-                                    title="Copy Lock ID"
-                                  >
-                                    <Copy className="w-3.5 h-3.5" />
-                                  </button>
-                                  {copiedId === lock.id.toString() && (
-                                    <span className="text-green-500">
-                                      Copied!
-                                    </span>
-                                  )}
-                                </p>
-                                {lock.description && (
-                                  <p className="text-sm text-dark-blue-green/70">
-                                    {lock.description}
-                                  </p>
-                                )}
-                              </div>
-                              <Badge className="bg-yellow-500 ">
-                                Ready to claim
-                              </Badge>
-                            </div>
+                  {readyLocks.filter(matchesQuery).sort(sortByUnlock).length === 0 ? (
+                    <div className="text-center py-10">
+                      <Info className="w-12 h-12 text-muted-blue mx-auto mb-2" />
+                      <p className="text-muted-blue">No ready locks{query ? " match your search" : ""}</p>
+                    </div>
+                  ) : (
+                    readyLocks
+                      .filter(matchesQuery)
+                      .sort(sortByUnlock)
+                      .map((lock) => (
+                        <Card
+                          key={lock.id.toString()}
+                          className="bg-light-gray border-yellow-500 hover:border-bright-blue/60 transition"
+                        >
+                          <CardContent className="pt-6">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                              <div className="flex-1 space-y-2">
+                                <div className="flex items-start justify-between">
+                                  <div>
+                                    <h3 className="text-lg font-bold text-dark-blue-green">
+                                      {lock.name || `Lock #${lock.id.toString()}`}
+                                    </h3>
+                                    <p className="font-mono text-xs text-dark-blue-green/70 inline-flex items-center gap-2">
+                                      <span>ID: {lock.id.toString()}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCopyId(lock.id)}
+                                        className="p-1 hover:text-bright-blue transition-colors"
+                                        aria-label="Copy Lock ID"
+                                        title="Copy Lock ID"
+                                      >
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                      {copiedId === lock.id.toString() && (
+                                        <span className="text-green-500">Copied!</span>
+                                      )}
+                                    </p>
+                                    {lock.description && (
+                                      <p className="text-sm text-dark-blue-green/70">{lock.description}</p>
+                                    )}
+                                  </div>
+                                  <Badge className="bg-yellow-500">Ready to claim</Badge>
+                                </div>
 
-                            <div className="grid sm:grid-cols-3 gap-2 text-sm">
-                              <div>
-                                <span className="text-dark-blue-green/70">
-                                  Amount:
-                                </span>
-                                <p className="font-semibold text-dark-blue-green">
-                                  <TokenAmount
-                                    token={lock.token}
-                                    amount={lock.amount}
-                                  />
-                                </p>
+                                <div className="grid sm:grid-cols-3 gap-2 text-sm">
+                                  <div>
+                                    <span className="text-dark-blue-green/70">Amount:</span>
+                                    <p className="font-semibold text-dark-blue-green">
+                                      <TokenAmount token={lock.token} amount={lock.amount} />
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <span className="text-dark-blue-green/70">Token:</span>
+                                    <a
+                                      href={`${BLOCK_EXPLORER}/address/${lock.token}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="font-mono text-dark-blue-green text-xs hover:text-bright-blue inline-flex items-center gap-1"
+                                    >
+                                      {formatAddress(lock.token)}
+                                      <ExternalLink className="h-3 w-3" />
+                                    </a>
+                                  </div>
+                                  <div>
+                                    <span className="text-dark-blue-green/70">Unlocked:</span>
+                                    <p className="font-semibold text-dark-blue-green">{formatDate(lock.UnlockedDate)}</p>
+                                  </div>
+                                </div>
                               </div>
-                              <div>
-                                <span className="text-dark-blue-green/70">
-                                  Token:
-                                </span>
-                                <a
-                                  href={`${BLOCK_EXPLORER}/address/${lock.token}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="font-mono text-dark-blue-green text-xs hover:text-bright-blue inline-flex items-center gap-1"
-                                >
-                                  {formatAddress(lock.token)}
-                                  <ExternalLink className="h-3 w-3" />
-                                </a>
-                              </div>
-                              <div>
-                                <span className="text-dark-blue-green/70">
-                                  Unlocked:
-                                </span>
-                                <p className="font-semibold text-dark-blue-green">
-                                  {formatDate(lock.UnlockedDate)}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
 
-                          <Button
-                            onClick={() => handleUnlock(lock.id)}
-                            className="bg-green-600 text-white md:w-auto w-full"
-                          >
-                            <Unlock className="w-4 h-4 mr-2" />
-                            Unlock Now
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                              <Button onClick={() => handleUnlock(lock.id)} className="bg-green-600 text-white md:w-auto w-full">
+                                <Unlock className="w-4 h-4 mr-2" /> Unlock Now
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))
+                  )}
                 </CardContent>
               </Card>
             )}
 
             {/* Active Locks */}
+            {(activeTab === "all" || activeTab === "active") && (
             <Card className="bg-dark-blue border-muted-blue">
               <CardHeader>
                 <CardTitle className="text-xl text-white flex items-center gap-2">
                   <Lock className="w-5 h-5 text-bright-blue" />
-                  Active Locks ({activeLocks.length})
+                  Active Locks ({activeLocks.filter(matchesQuery).length})
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -587,7 +699,7 @@ export default function UnlockPage() {
                     <div className="animate-spin w-8 h-8 border-4 border-bright-blue border-t-transparent rounded-full mx-auto mb-4"></div>
                     <p className="text-muted-blue">Loading your locks...</p>
                   </div>
-                ) : activeLocks.length === 0 ? (
+                ) : activeLocks.filter(matchesQuery).length === 0 ? (
                   <div className="text-center py-12">
                     <Info className="w-16 h-16 text-muted-blue mx-auto mb-4" />
                     <p className="text-muted-blue text-lg">No active locks</p>
@@ -600,10 +712,13 @@ export default function UnlockPage() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {activeLocks.map((lock) => (
+                    {activeLocks
+                      .filter(matchesQuery)
+                      .sort(sortByUnlock)
+                      .map((lock) => (
                       <Card
                         key={lock.id.toString()}
-                        className="bg-light-gray border-muted-blue"
+                        className="bg-light-gray border-muted-blue hover:border-bright-blue/60 transition"
                       >
                         <CardContent className="pt-6">
                           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
@@ -669,11 +784,15 @@ export default function UnlockPage() {
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2 mt-2">
-                                <Clock className="w-4 h-4 text-bright-blue" />
-                                <span className="text-sm font-semibold text-bright-blue">
-                                  {getTimeRemaining(lock.UnlockedDate)}
-                                </span>
+                              <div className="mt-3 space-y-1">
+                                <Progress value={getProgressPct(lock)} className="bg-muted-blue/30" />
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="inline-flex items-center gap-1 text-dark-blue-green/70">
+                                    <Clock className="w-3.5 h-3.5 text-bright-blue" />
+                                    {getTimeRemaining(lock.UnlockedDate)}
+                                  </span>
+                                  <span className="text-dark-blue-green/70">{getProgressPct(lock).toFixed(0)}%</span>
+                                </div>
                               </div>
                             </div>
 
@@ -689,99 +808,89 @@ export default function UnlockPage() {
                 )}
               </CardContent>
             </Card>
+            )}
 
             {/* Claimed Locks */}
-            {claimedLocks.length > 0 && (
+            {(activeTab === "all" || activeTab === "claimed") && (
               <Card className="bg-dark-blue border-muted-blue">
                 <CardHeader>
                   <CardTitle className="text-xl text-white flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-gray-500" />
-                    Claimed Locks ({claimedLocks.length})
+                    Claimed Locks ({claimedLocks.filter(matchesQuery).length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {claimedLocks.map((lock) => (
-                    <Card
-                      key={lock.id.toString()}
-                      className="bg-light-gray border-gray-300"
-                    >
-                      <CardContent className="pt-6">
-                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                          <div className="flex-1 space-y-2">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <h3 className="text-lg font-bold text-dark-blue-green">
-                                  {lock.name || `Lock #${lock.id.toString()}`}
-                                </h3>
-                                <p className="font-mono text-xs text-dark-blue-green/70 inline-flex items-center gap-2">
-                                  <span>ID: {lock.id.toString()}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopyId(lock.id)}
-                                    className="p-1 hover:text-bright-blue transition-colors"
-                                    aria-label="Copy Lock ID"
-                                    title="Copy Lock ID"
-                                  >
-                                    <Copy className="w-3.5 h-3.5" />
-                                  </button>
-                                  {copiedId === lock.id.toString() && (
-                                    <span className="text-green-500">
-                                      Copied!
-                                    </span>
-                                  )}
-                                </p>
-                                {lock.description && (
-                                  <p className="text-sm text-dark-blue-green/70">
-                                    {lock.description}
-                                  </p>
-                                )}
-                              </div>
-                              <Badge className="bg-gray-500">Claimed</Badge>
-                            </div>
+                  {claimedLocks.filter(matchesQuery).sort(sortByUnlock).length === 0 ? (
+                    <div className="text-center py-10">
+                      <Info className="w-12 h-12 text-muted-blue mx-auto mb-2" />
+                      <p className="text-muted-blue">No claimed locks{query ? " match your search" : ""}</p>
+                    </div>
+                  ) : (
+                    claimedLocks
+                      .filter(matchesQuery)
+                      .sort(sortByUnlock)
+                      .map((lock) => (
+                        <Card key={lock.id.toString()} className="bg-light-gray border-gray-300 hover:border-bright-blue/60 transition">
+                          <CardContent className="pt-6">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                              <div className="flex-1 space-y-2">
+                                <div className="flex items-start justify-between">
+                                  <div>
+                                    <h3 className="text-lg font-bold text-dark-blue-green">
+                                      {lock.name || `Lock #${lock.id.toString()}`}
+                                    </h3>
+                                    <p className="font-mono text-xs text-dark-blue-green/70 inline-flex items-center gap-2">
+                                      <span>ID: {lock.id.toString()}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCopyId(lock.id)}
+                                        className="p-1 hover:text-bright-blue transition-colors"
+                                        aria-label="Copy Lock ID"
+                                        title="Copy Lock ID"
+                                      >
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                      {copiedId === lock.id.toString() && <span className="text-green-500">Copied!</span>}
+                                    </p>
+                                    {lock.description && (
+                                      <p className="text-sm text-dark-blue-green/70">{lock.description}</p>
+                                    )}
+                                  </div>
+                                  <Badge className="bg-gray-500">Claimed</Badge>
+                                </div>
 
-                            <div className="grid sm:grid-cols-3 gap-2 text-sm">
-                              <div>
-                                <span className="text-dark-blue-green/70">
-                                  Amount:
-                                </span>
-                                <p className="font-semibold text-dark-blue-green">
-                                  <TokenAmount
-                                    token={lock.token}
-                                    amount={lock.amount}
-                                  />
-                                </p>
-                              </div>
-                              <div>
-                                <span className="text-dark-blue-green/70">
-                                  Token:
-                                </span>
-                                <a
-                                  href={`${BLOCK_EXPLORER}/address/${lock.token}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="font-mono text-dark-blue-green text-xs hover:text-bright-blue inline-flex items-center gap-1"
-                                >
-                                  {formatAddress(lock.token)}
-                                  <ExternalLink className="h-3 w-3" />
-                                </a>
-                              </div>
-                              <div>
-                                <span className="text-dark-blue-green/70">
-                                  Claimed Amount:
-                                </span>
-                                <p className="font-semibold text-dark-blue-green">
-                                  <TokenAmount
-                                    token={lock.token}
-                                    amount={lock.unlockedAmount}
-                                  />
-                                </p>
+                                <div className="grid sm:grid-cols-3 gap-2 text-sm">
+                                  <div>
+                                    <span className="text-dark-blue-green/70">Amount:</span>
+                                    <p className="font-semibold text-dark-blue-green">
+                                      <TokenAmount token={lock.token} amount={lock.amount} />
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <span className="text-dark-blue-green/70">Token:</span>
+                                    <a
+                                      href={`${BLOCK_EXPLORER}/address/${lock.token}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="font-mono text-dark-blue-green text-xs hover:text-bright-blue inline-flex items-center gap-1"
+                                    >
+                                      {formatAddress(lock.token)}
+                                      <ExternalLink className="h-3 w-3" />
+                                    </a>
+                                  </div>
+                                  <div>
+                                    <span className="text-dark-blue-green/70">Claimed Amount:</span>
+                                    <p className="font-semibold text-dark-blue-green">
+                                      <TokenAmount token={lock.token} amount={lock.unlockedAmount} />
+                                    </p>
+                                  </div>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                          </CardContent>
+                        </Card>
+                      ))
+                  )}
                 </CardContent>
               </Card>
             )}
